@@ -78,3 +78,16 @@ charset =  "utf8mb4"
   chunkOverlap = 100
   topK = 5
   scoreThreshold = 0.3
+
+  # Web search via Tavily. Key comes from TAVILY_API_KEY.
+  [searchConfig]
+  baseUrl = "https://api.tavily.com"
+  maxResults = 5
+
+  # Page fetching limits. Keep allowPrivate = false so the model cannot reach
+  # internal addresses (container services, cloud metadata endpoints).
+  [fetchConfig]
+  maxBytes = 2000000
+  timeoutSeconds = 15
+  maxChars = 8000
+  allowPrivate = false

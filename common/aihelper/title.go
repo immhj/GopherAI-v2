@@ -30,22 +30,36 @@ func GenerateTitle(ctx context.Context, model, question string) string {
 	callCtx, cancel := context.WithTimeout(ctx, titleTimeout)
 	defer cancel()
 
-	messages := []ChatMessage{
-		TextMessage("system", "你是一个会话命名助手。请用不超过5个字概括用户这句话的主题，"+
-			"作为聊天记录的标题。只输出标题本身，不要引号、标点、解释或任何多余内容。"),
-		TextMessage("user", truncateRunes(question, 200)),
-	}
+	// 把待概括的内容和指令放在同一条 user 消息里，并用分隔符界定。
+	// 早先把指令写在 system 里时，模型有时会去概括"指令本身"，
+	// 生成出「会话命名助手的任务」这类标题。
+	prompt := "下面三重引号中是一段用户提问：\n\"\"\"\n" +
+		truncateRunes(question, 200) +
+		"\n\"\"\"\n\n请为这段提问起一个不超过5个字的中文标题，用于聊天记录列表。" +
+		"直接输出标题文字本身，不要加引号、标点、前缀或任何说明。"
 
-	raw, err := ChatCompletion(callCtx, resolveModel(model), messages)
+	raw, err := ChatCompletion(callCtx, resolveModel(model), []ChatMessage{
+		TextMessage("user", prompt),
+	})
 	if err != nil {
 		return fallback
 	}
 
 	title := cleanTitle(raw)
-	if title == "" {
+	if title == "" || looksLikeInstruction(title) {
 		return fallback
 	}
 	return truncateRunes(title, titleMaxRunes)
+}
+
+// looksLikeInstruction 拦掉模型"复述任务"而非给出标题的情况
+func looksLikeInstruction(s string) bool {
+	for _, bad := range []string{"标题", "概括", "助手", "提问", "任务", "引号", "输出"} {
+		if strings.Contains(s, bad) {
+			return true
+		}
+	}
+	return false
 }
 
 // cleanTitle 去掉模型可能带上的引号、标点和换行

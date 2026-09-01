@@ -55,3 +55,13 @@ charset =  "utf8mb4"
   chunkOverlap = 100
   topK = 5
   scoreThreshold = 0.3
+
+  [searchConfig]
+  baseUrl = "https://api.tavily.com"
+  maxResults = 5
+
+  [fetchConfig]
+  maxBytes = 2000000
+  timeoutSeconds = 15
+  maxChars = 8000
+  allowPrivate = false

@@ -21,9 +21,9 @@ type (
 		Sessions []model.SessionInfo `json:"sessions,omitempty"`
 	}
 	CreateSessionAndSendMessageRequest struct {
-		UserQuestion string `json:"question"`         // 用户问题
-		Model        string `json:"model"`            // 真实模型名，如 claude-opus-5
-		Image        string `json:"image,omitempty"`  // 可选：图片 data URL / 链接（多模态）
+		UserQuestion string `json:"question"`        // 用户问题
+		Model        string `json:"model"`           // 真实模型名，如 claude-opus-5
+		Image        string `json:"image,omitempty"` // 可选：图片 data URL / 链接（多模态）
 	}
 
 	CreateSessionAndSendMessageResponse struct {
@@ -197,7 +197,6 @@ func ChatStreamSend(c *gin.Context) {
 	c.Header("Connection", "keep-alive")
 	c.Header("Access-Control-Allow-Origin", "*")
 	c.Header("X-Accel-Buffering", "no") // 禁止代理缓存
-
 
 	code_ := session.ChatStreamSend(userName, req.SessionID, req.UserQuestion, req.Model, req.Image, http.ResponseWriter(c.Writer))
 	if code_ != code.CodeSuccess {

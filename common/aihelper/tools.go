@@ -8,7 +8,11 @@ import (
 	"sync"
 	"time"
 
+	"GopherAI/common/calc"
 	"GopherAI/common/rag"
+	"GopherAI/common/weather"
+	"GopherAI/common/webfetch"
+	"GopherAI/common/websearch"
 )
 
 // userNameKey 用于把当前登录用户放进 context。
@@ -180,6 +184,120 @@ func registerBuiltinTools() {
 				return "", err
 			}
 			return rag.FormatHits(hits), nil
+		},
+	)
+
+	// web_search：联网搜索。模型的知识有截止日期，凡是"最新/现在/今年"这类
+	// 时效性问题都应该先搜。
+	RegisterTool(
+		"web_search",
+		"联网搜索互联网上的信息。当问题涉及时事、最新版本、实时数据、具体人物或产品的现状，"+
+			"或任何你不确定、可能已经过时的事实时，使用此工具。返回摘要和若干带链接的结果。",
+		map[string]interface{}{
+			"type": "object",
+			"properties": map[string]interface{}{
+				"query": map[string]interface{}{
+					"type":        "string",
+					"description": "搜索关键词或问题，使用自然语言，尽量具体。",
+				},
+				"max_results": map[string]interface{}{
+					"type":        "integer",
+					"description": "返回结果条数，默认 5，最多 10。",
+				},
+			},
+			"required": []string{"query"},
+		},
+		func(ctx context.Context, args map[string]interface{}) (string, error) {
+			query, _ := args["query"].(string)
+			if query == "" {
+				return "", fmt.Errorf("query is required")
+			}
+			maxResults := 0
+			if v, ok := args["max_results"].(float64); ok {
+				maxResults = int(v)
+			}
+			resp, err := websearch.Search(ctx, query, maxResults)
+			if err != nil {
+				return "", err
+			}
+			return websearch.Format(resp), nil
+		},
+	)
+
+	// fetch_url：抓取网页正文，是 web_search 的搭档（搜索给链接，这个读全文）。
+	// 出站地址受私网黑名单限制，详见 common/webfetch。
+	RegisterTool(
+		"fetch_url",
+		"抓取指定网页的正文内容。通常在 web_search 之后使用：当搜索结果的摘要不足以回答问题，"+
+			"需要阅读某个链接的完整内容时调用。也可用于用户直接给出的网址。",
+		map[string]interface{}{
+			"type": "object",
+			"properties": map[string]interface{}{
+				"url": map[string]interface{}{
+					"type":        "string",
+					"description": "要抓取的完整网址，必须以 http:// 或 https:// 开头。",
+				},
+			},
+			"required": []string{"url"},
+		},
+		func(ctx context.Context, args map[string]interface{}) (string, error) {
+			target, _ := args["url"].(string)
+			if target == "" {
+				return "", fmt.Errorf("url is required")
+			}
+			return webfetch.Fetch(ctx, target)
+		},
+	)
+
+	// calculate：模型做多位数算术不可靠（它在续写数字而非计算），交给代码执行。
+	RegisterTool(
+		"calculate",
+		"计算数学表达式并返回精确结果。涉及具体数字运算时应当使用此工具，不要自己心算。"+
+			"支持 + - * / % ^、括号，以及 sqrt、abs、min、max、floor、ceil、round、pow、log、ln、sin、cos、tan 等函数，"+
+			"常量 pi 和 e。例如 (1234*5678)/3.5 或 sqrt(2)*pi。",
+		map[string]interface{}{
+			"type": "object",
+			"properties": map[string]interface{}{
+				"expression": map[string]interface{}{
+					"type":        "string",
+					"description": "要计算的数学表达式，只包含数字、运算符、括号和受支持的函数名。",
+				},
+			},
+			"required": []string{"expression"},
+		},
+		func(ctx context.Context, args map[string]interface{}) (string, error) {
+			expr, _ := args["expression"].(string)
+			if expr == "" {
+				return "", fmt.Errorf("expression is required")
+			}
+			v, err := calc.Eval(expr)
+			if err != nil {
+				return "", err
+			}
+			return fmt.Sprintf("%s = %s", expr, calc.Format(v)), nil
+		},
+	)
+
+	// get_weather：wttr.in，无需 key。
+	RegisterTool(
+		"get_weather",
+		"查询指定城市的当前天气与未来几天温度。当用户询问天气、气温、是否下雨、穿衣建议时使用。",
+		map[string]interface{}{
+			"type": "object",
+			"properties": map[string]interface{}{
+				"city": map[string]interface{}{
+					"type":        "string",
+					"description": "城市名称，支持中文或英文，例如 北京、Shanghai、Tokyo。",
+				},
+			},
+			"required": []string{"city"},
+		},
+		func(ctx context.Context, args map[string]interface{}) (string, error) {
+			city, _ := args["city"].(string)
+			if city == "" {
+				return "", fmt.Errorf("city is required")
+			}
+			return weather.Get(ctx, city)
 		},
 	)
 }

@@ -61,8 +61,15 @@ Three orthogonal concepts, previously conflated in one "选择模型" dropdown:
 
 - **Tool Registry** — the single place tools are registered. This is the seam of
   the agent: adding a capability means registering a tool, not changing the
-  loop. Future MCP tools (translated from an MCP server's `tools/list`) and RAG
-  (`search_documents`) become entries here.
+  loop. Document retrieval was added this way without touching the loop at all.
+
+- **MCP** — a *protocol* for exposing tools that live in a separate process. It
+  is a **source** of tools, not a tool, and not a kind of capability. To the
+  model there is no difference: it sees registry entries and cannot tell whether
+  one is a local function or a proxied remote call. Implication worth recording,
+  because it is routinely misunderstood: routing a tool through MCP does not
+  remove that tool's need for credentials. A search tool needs a search API key
+  whether it is called directly or through an MCP server.
 
 - **Agent Loop** — the cycle that makes tools useful: send messages + tool
   declarations, and if the model responds with tool calls, execute them locally,
@@ -126,6 +133,22 @@ MCP, Ollama, and text-to-speech are not part of this version.
 - **Score threshold** — a similarity floor. Below it, retrieval reports nothing
   found rather than returning weak matches, so the model can honestly say the
   documents do not cover the question.
+
+## Outbound requests made on the model's behalf
+
+Some tools take a destination from the model and then have the server make a
+request to it. That inverts the usual trust direction: the *target* of a
+privileged network call becomes attacker-influencable via prompt injection.
+
+- **Blocked range** — an address the server refuses to fetch on the model's
+  behalf, because reaching it would expose internal services or cloud metadata.
+  Loopback, private ranges, link-local, and CGNAT are all treated this way.
+  Redirects are re-checked per hop, since a public hostname can otherwise
+  redirect inward.
+
+The general rule this reflects: **anything a tool uses to decide *who* it acts
+as, or *what* it may reach, must come from the server, not from the model.**
+User identity reaches retrieval through request context for the same reason.
 
 ## Captcha
 

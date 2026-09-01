@@ -121,6 +121,8 @@ services:
       ANTHROPIC_API_KEY: "${ANTHROPIC_API_KEY:-}"
       # 火山方舟（Volcengine Ark）的 key，用于文档向量化
       ARK_API_KEY: "${ARK_API_KEY:-}"
+      # Tavily 的 key，用于 web_search 工具
+      TAVILY_API_KEY: "${TAVILY_API_KEY:-}"
     extra_hosts:
       # 让容器内可用 host.docker.internal 访问宿主机上的 Aether 网关
       - "host.docker.internal:host-gateway"

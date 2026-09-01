@@ -64,6 +64,20 @@ type EmbeddingConfig struct {
 	EmbeddingConcurrency int    `toml:"concurrency"` // 并发请求数
 }
 
+// SearchConfig 网络搜索（Tavily）。APIKey 从环境变量 TAVILY_API_KEY 读取。
+type SearchConfig struct {
+	SearchBaseUrl    string `toml:"baseUrl"`
+	SearchMaxResults int    `toml:"maxResults"`
+}
+
+// FetchConfig 网页抓取的安全与体量限制
+type FetchConfig struct {
+	FetchMaxBytes       int  `toml:"maxBytes"`       // 响应体最大读取字节数
+	FetchTimeoutSeconds int  `toml:"timeoutSeconds"` // 单次抓取超时
+	FetchMaxChars       int  `toml:"maxChars"`       // 返回给模型的正文字符上限
+	FetchAllowPrivate   bool `toml:"allowPrivate"`   // 是否允许访问内网地址（默认 false，防 SSRF）
+}
+
 // RagConfig 切块与检索参数
 type RagConfig struct {
 	RagChunkSize      int     `toml:"chunkSize"`
@@ -92,6 +106,8 @@ type Config struct {
 	QdrantConfig       `toml:"qdrantConfig"`
 	EmbeddingConfig    `toml:"embeddingConfig"`
 	RagConfig          `toml:"ragConfig"`
+	SearchConfig       `toml:"searchConfig"`
+	FetchConfig        `toml:"fetchConfig"`
 }
 
 type RedisKeyConfig struct {
