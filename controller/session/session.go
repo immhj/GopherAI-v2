@@ -6,8 +6,11 @@ import (
 	"GopherAI/controller"
 	"GopherAI/model"
 	"GopherAI/service/session"
+	"encoding/json"
 	"fmt"
+	"log"
 	"net/http"
+	"time"
 
 	"github.com/gin-gonic/gin"
 )
@@ -129,11 +132,33 @@ func CreateStreamSessionAndSendMessage(c *gin.Context) {
 	c.Writer.WriteString(fmt.Sprintf("data: {\"sessionId\": \"%s\"}\n\n", sessionID))
 	c.Writer.Flush()
 
+	// 与回答并发生成短标题，避免给首个字增加延迟。
+	// 标题调用很短，通常在回答结束前就完成了。
+	titleCh := make(chan string, 1)
+	go func() {
+		titleCh <- session.GenerateAndStoreTitle(userName, sessionID, req.Model, req.UserQuestion)
+	}()
+
 	// 然后开始把本次回答进行流式发送（包含最后的 [DONE]）
 	code_ = session.StreamMessageToExistingSession(userName, sessionID, req.UserQuestion, req.Model, req.Image, http.ResponseWriter(c.Writer))
 	if code_ != code.CodeSuccess {
 		c.SSEvent("error", gin.H{"message": "Failed to send message"})
 		return
+	}
+
+	// 回答写完之后再写标题事件：SSE 不能从两个 goroutine 并发写，
+	// 所以这里等标题就绪后由本 goroutine 统一写出。
+	select {
+	case title := <-titleCh:
+		if title != "" {
+			if payload, err := json.Marshal(map[string]string{"title": title}); err == nil {
+				c.Writer.WriteString("data: " + string(payload) + "\n\n")
+				c.Writer.Flush()
+			}
+		}
+	case <-time.After(3 * time.Second):
+		// 标题没赶上就算了，前端先用兜底标题，下次加载列表时会拿到真标题
+		log.Printf("[title] generation did not finish in time for session=%s", sessionID)
 	}
 }
 

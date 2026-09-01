@@ -9,28 +9,36 @@ import (
 	"encoding/json"
 	"log"
 	"net/http"
+	"strings"
 
 	"github.com/google/uuid"
 )
 
 var ctx = context.Background()
 
+// GetUserSessionsByUserName 取用户的会话列表。
+// 数据源是数据库而不是内存中的 AIHelperManager：内存 map 的遍历顺序不固定，
+// 会导致列表每次刷新都在跳动，而且标题本来就存在库里。
 func GetUserSessionsByUserName(userName string) ([]model.SessionInfo, error) {
-	//获取用户的所有会话ID
+	sessions, err := session.GetSessionsByUserName(userName)
+	if err != nil {
+		return nil, err
+	}
 
-	manager := aihelper.GetGlobalManager()
-	Sessions := manager.GetUserSessions(userName)
-
-	var SessionInfos []model.SessionInfo
-
-	for _, session := range Sessions {
-		SessionInfos = append(SessionInfos, model.SessionInfo{
-			SessionID: session,
-			Title:     session, // 暂时用sessionID作为标题，后续重构需要的时候可以更改
+	infos := make([]model.SessionInfo, 0, len(sessions))
+	for i := range sessions {
+		s := &sessions[i]
+		title := s.Title
+		if title == "" {
+			title = "新会话"
+		}
+		infos = append(infos, model.SessionInfo{
+			SessionID: s.ID,
+			Title:     title,
 		})
 	}
 
-	return SessionInfos, nil
+	return infos, nil
 }
 
 func CreateSessionAndSendMessage(userName string, userQuestion string, modelName string, imageURL string) (string, string, code.Code) {
@@ -38,7 +46,7 @@ func CreateSessionAndSendMessage(userName string, userQuestion string, modelName
 	newSession := &model.Session{
 		ID:       uuid.New().String(),
 		UserName: userName,
-		Title:    userQuestion, // 可以根据需求设置标题，这边暂时用用户第一次的问题作为标题
+		Title:    fallbackTitle(userQuestion),
 	}
 	createdSession, err := session.CreateSession(newSession)
 	if err != nil {
@@ -54,7 +62,10 @@ func CreateSessionAndSendMessage(userName string, userQuestion string, modelName
 		return "", "", code.AIModelFail
 	}
 
-	//3：生成AI回复
+	//3：与回答并发生成短标题
+	go GenerateAndStoreTitle(userName, createdSession.ID, modelName, userQuestion)
+
+	//4：生成AI回复
 	aiResponse, err_ := helper.GenerateResponse(userName, ctx, aihelper.ChatRequest{
 		Model:    modelName,
 		Question: userQuestion,
@@ -72,7 +83,9 @@ func CreateStreamSessionOnly(userName string, userQuestion string) (string, code
 	newSession := &model.Session{
 		ID:       uuid.New().String(),
 		UserName: userName,
-		Title:    userQuestion,
+		// 先存一个截取的兜底标题，短标题生成好之后会覆盖它。
+		// 这样即使生成失败，列表里也有可读内容。
+		Title: fallbackTitle(userQuestion),
 	}
 	createdSession, err := session.CreateSession(newSession)
 	if err != nil {
@@ -80,6 +93,32 @@ func CreateStreamSessionOnly(userName string, userQuestion string) (string, code
 		return "", code.CodeServerBusy
 	}
 	return createdSession.ID, code.CodeSuccess
+}
+
+// fallbackTitle 截取提问作为兜底标题
+func fallbackTitle(question string) string {
+	q := strings.TrimSpace(question)
+	if q == "" {
+		return "新会话"
+	}
+	runes := []rune(q)
+	if len(runes) > 10 {
+		return string(runes[:10])
+	}
+	return q
+}
+
+// GenerateAndStoreTitle 生成短标题并写回数据库，返回最终标题。
+// 由调用方与回答并发执行，避免给首个字增加延迟。
+func GenerateAndStoreTitle(userName, sessionID, modelName, question string) string {
+	title := aihelper.GenerateTitle(ctx, modelName, question)
+	if title == "" {
+		title = fallbackTitle(question)
+	}
+	if err := session.UpdateTitle(sessionID, title); err != nil {
+		log.Println("GenerateAndStoreTitle UpdateTitle error:", err)
+	}
+	return title
 }
 
 func StreamMessageToExistingSession(userName string, sessionID string, userQuestion string, modelName string, imageURL string, writer http.ResponseWriter) code.Code {
