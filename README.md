@@ -164,12 +164,16 @@ data: {"title":"Go并发协作机制"}    // 会话短标题，生成好后下�
 ├── model/                  数据模型
 ├── middleware/jwt/         JWT 鉴权中间件
 ├── common/
-│   ├── aihelper/           模型客户端、工具表、agent 循环
+│   ├── aihelper/           模型客户端、工具表、agent 循环、会话标题
+│   ├── websearch/          联网搜索客户端（Tavily）
+│   ├── webfetch/           网页抓取 + SSRF 防护
+│   ├── calc/               表达式求值器
+│   ├── weather/            天气查询客户端
 │   ├── rag/                切块 + 向量化 + 检索的编排
 │   ├── chunk/              文本切块
 │   ├── embedding/          火山方舟向量化客户端
 │   ├── qdrant/             向量库客户端
-│   ├── mcp/                MCP 天气服务（独立程序，尚未接入）
+│   ├── mcp/                MCP 天气服务（独立 module，尚未接入）
 │   ├── mysql/ redis/ rabbitmq/ email/
 ├── config/                 配置定义与文件
 ├── vue-frontend/           Vue 3 前端
