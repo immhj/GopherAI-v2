@@ -1,0 +1,66 @@
+# Template for the container configuration.
+#
+#   cp config/config.docker.toml.example config/config.docker.toml
+#
+# Then fill in the values marked below. The real config.docker.toml is
+# gitignored because it holds live credentials.
+#
+# docker-compose mounts config/config.docker.toml into the backend container,
+# so this file must exist before running `docker compose up`.
+
+[mainConfig]
+appName = "GopherAI"
+host = "0.0.0.0"
+port = 9090
+
+# Used to email registration captchas. For QQ Mail, `authcode` is the
+# SMTP authorisation code (NOT your login password): QQ Mail settings ->
+# account -> enable POP3/SMTP -> generate code.
+[emailConfig]
+authcode = "your-smtp-authcode"
+email = "your-email@qq.com"
+
+# Service hostnames below match the docker-compose service names.
+[redisConfig]
+host = "redis"
+port = 6379
+password = ""
+db = 0
+
+[mysqlConfig]
+host = "mysql"
+port = 3306
+user = "root"
+password = "123456"
+databaseName = "GopherAI"
+charset =  "utf8mb4"
+
+[jwtConfig]
+ expire_duration= 8760
+ issuer= "huanheart"
+ subject= "GopherAI"
+ key= "change-me-in-production"
+
+ [rabbitmqConfig]
+  host= "rabbitmq"
+  port= 5672
+  username= "root"
+  password= "123456"
+  vhost= "/"
+
+ # RAG embedding provider. Needs OPENAI_API_KEY (DashScope) to actually work;
+ # RAG retrieval is not wired into this version.
+ [ragModelConfig]
+  embeddingModel= "text-embedding-v4"
+  chatModelName="qwen-turbo"
+  docDir = "./docs"
+  baseUrl="https://dashscope.aliyuncs.com/compatible-mode/v1"
+  dimension=1024
+
+  # Chat models are reached through one OpenAI-compatible gateway.
+  # The auth key comes from the ANTHROPIC_API_KEY environment variable.
+  # host.docker.internal lets the container reach a gateway on the host.
+  [modelServiceConfig]
+  baseUrl = "http://host.docker.internal:8085/v1"
+  defaultModel = "claude-opus-5"
+  models = ["claude-opus-5", "gpt-5.6-sol"]

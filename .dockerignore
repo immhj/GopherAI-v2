@@ -1,0 +1,21 @@
+# VCS
+.git
+.gitignore
+
+# Frontend (built via its own Dockerfile)
+vue-frontend
+
+# Local runtime data
+uploads
+docs
+
+# Docker artifacts
+Dockerfile
+.dockerignore
+docker-compose.yml
+
+# Editor / OS
+.idea
+.vscode
+*.log
+.DS_Store

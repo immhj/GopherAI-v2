@@ -1,0 +1,27 @@
+# ---- Secrets / local configuration ----
+# Contains real SMTP credentials and deployment passwords.
+# Copy config/config.docker.toml.example and fill it in locally.
+config/config.docker.toml
+.env
+.env.local
+
+# ---- Dependencies ----
+node_modules/
+
+# ---- Build output ----
+vue-frontend/dist/
+# compiled Go binaries
+/gopherai
+/GopherAI
+*.exe
+
+# ---- Runtime data ----
+uploads/
+docs/
+*.log
+
+# ---- Editor / OS ----
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db
