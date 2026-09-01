@@ -1,101 +1,121 @@
 package file
 
 import (
-	"GopherAI/common/rag"
-	"GopherAI/config"
-	"GopherAI/utils"
 	"context"
 	"io"
 	"log"
 	"mime/multipart"
 	"os"
 	"path/filepath"
+
+	"GopherAI/common/rag"
+	docDao "GopherAI/dao/document"
+	"GopherAI/model"
+	"GopherAI/utils"
+
+	"github.com/google/uuid"
 )
 
-// 上传rag相关文件（这里只允许文本文件）
-// 其实可以直接将其向量化进行保存，但这边依旧存储到服务器上以便后续可以在服务器上查看历史RAG文件
-func UploadRagFile(username string, file *multipart.FileHeader) (string, error) {
-	// 校验文件类型和文件名
+// UploadRagFile 上传一份知识库文档：存盘 -> 切块向量化 -> 记录元信息。
+// 支持多文档：每次上传都是新增，不再覆盖旧文件。
+func UploadRagFile(username string, file *multipart.FileHeader) (*model.Document, error) {
 	if err := utils.ValidateFile(file); err != nil {
 		log.Printf("File validation failed: %v", err)
-		return "", err
+		return nil, err
 	}
 
-	// 创建用户目录
 	userDir := filepath.Join("uploads", username)
 	if err := os.MkdirAll(userDir, 0755); err != nil {
 		log.Printf("Failed to create user directory %s: %v", userDir, err)
-		return "", err
+		return nil, err
 	}
 
-	// 删除用户目录中的所有现有文件及其索引（每个用户只能有一个文件）
-	files, err := os.ReadDir(userDir)
-	if err == nil {
-		for _, f := range files {
-			if !f.IsDir() {
-				filename := f.Name()
-				// 删除该文件对应的 Redis 索引
-				if err := rag.DeleteIndex(context.Background(), filename); err != nil {
-					log.Printf("Failed to delete index for %s: %v", filename, err)
-					// 继续执行，不因为索引删除失败而中断文件上传
-				}
-			}
-		}
-	}
-	// 删除用户目录中的所有文件
-	if err := utils.RemoveAllFilesInDir(userDir); err != nil {
-		log.Printf("Failed to clean user directory %s: %v", userDir, err)
-		return "", err
-	}
-
-	// 生成UUID作为唯一文件名
-	uuid := utils.GenerateUUID()
-
+	docID := uuid.New().String()
 	ext := filepath.Ext(file.Filename)
-	filename := uuid + ext
-	filePath := filepath.Join(userDir, filename)
+	storedPath := filepath.Join(userDir, docID+ext)
 
-	// 打开上传的文件
+	// 落盘
 	src, err := file.Open()
 	if err != nil {
 		log.Printf("Failed to open uploaded file: %v", err)
-		return "", err
+		return nil, err
 	}
 	defer src.Close()
 
-	// 创建目标文件
-	dst, err := os.Create(filePath)
+	dst, err := os.Create(storedPath)
 	if err != nil {
-		log.Printf("Failed to create destination file %s: %v", filePath, err)
-		return "", err
+		log.Printf("Failed to create destination file %s: %v", storedPath, err)
+		return nil, err
 	}
-	defer dst.Close()
-
-	if _, err := io.Copy(dst, src); err != nil {
-		log.Printf("Failed to copy file content: %v", err)
-		return "", err
+	written, copyErr := io.Copy(dst, src)
+	dst.Close()
+	if copyErr != nil {
+		log.Printf("Failed to copy file content: %v", copyErr)
+		os.Remove(storedPath)
+		return nil, copyErr
 	}
 
-	log.Printf("File uploaded successfully: %s", filePath)
-
-	// 创建 RAG 索引器并对文件进行向量化
-	indexer, err := rag.NewRAGIndexer(filename, config.GetConfig().RagModelConfig.RagEmbeddingModel)
+	content, err := os.ReadFile(storedPath)
 	if err != nil {
-		log.Printf("Failed to create RAG indexer: %v", err)
-		// 删除已上传的文件
-		os.Remove(filePath)
-		return "", err
+		os.Remove(storedPath)
+		return nil, err
 	}
 
-	// 读取文件内容并创建向量索引
-	if err := indexer.IndexFile(context.Background(), filePath); err != nil {
-		log.Printf("Failed to index file: %v", err)
-		// 删除已上传的文件和索引
-		os.Remove(filePath)
-		rag.DeleteIndex(context.Background(), filename)
-		return "", err
+	// 切块 + 向量化 + 入向量库
+	ctx := context.Background()
+	chunkCount, err := rag.IndexDocument(ctx, username, docID, file.Filename, string(content))
+	if err != nil {
+		log.Printf("Failed to index document: %v", err)
+		// 索引失败就不要留下孤儿文件和半截向量
+		os.Remove(storedPath)
+		_ = rag.DeleteDocument(ctx, username, docID)
+		return nil, err
 	}
 
-	log.Printf("File indexed successfully: %s", filename)
-	return filePath, nil
+	doc := &model.Document{
+		ID:         docID,
+		UserName:   username,
+		Filename:   file.Filename,
+		StoredPath: storedPath,
+		SizeBytes:  written,
+		ChunkCount: chunkCount,
+	}
+	if err := docDao.Create(doc); err != nil {
+		log.Printf("Failed to save document record: %v", err)
+		os.Remove(storedPath)
+		_ = rag.DeleteDocument(ctx, username, docID)
+		return nil, err
+	}
+
+	log.Printf("Document indexed: user=%s file=%s chunks=%d", username, file.Filename, chunkCount)
+	return doc, nil
+}
+
+// ListDocuments 列出用户的文档
+func ListDocuments(username string) ([]model.Document, error) {
+	return docDao.ListByUser(username)
+}
+
+// DeleteDocument 删除文档：向量、文件、记录一并清掉。
+// 先按 username + id 取记录，取不到就说明不是这个用户的文档。
+func DeleteDocument(username, docID string) error {
+	doc, err := docDao.GetOwned(username, docID)
+	if err != nil {
+		return err
+	}
+
+	ctx := context.Background()
+	if err := rag.DeleteDocument(ctx, username, docID); err != nil {
+		// 向量删除失败就中止，避免留下检索得到但已无文件的内容
+		log.Printf("Failed to delete vectors for doc %s: %v", docID, err)
+		return err
+	}
+
+	if doc.StoredPath != "" {
+		if err := os.Remove(doc.StoredPath); err != nil && !os.IsNotExist(err) {
+			log.Printf("Failed to remove file %s: %v", doc.StoredPath, err)
+		}
+	}
+
+	return docDao.Delete(username, docID)
 }

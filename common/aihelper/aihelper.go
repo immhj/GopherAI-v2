@@ -2,7 +2,6 @@ package aihelper
 
 import (
 	"GopherAI/common/rabbitmq"
-	"GopherAI/common/rag"
 	"GopherAI/config"
 	"GopherAI/model"
 	"context"
@@ -95,37 +94,15 @@ func (a *AIHelper) buildRequestMessages(ctx context.Context, userName string, re
 		out = append(out, TextMessage(role, history[i].Content))
 	}
 
-	// 组装最后一条用户消息
-	finalText := req.Question
-
-	// RAG 自动：仅在没有图片时尝试（图片走多模态问答）
-	if req.ImageURL == "" {
-		if augmented, ok := a.augmentWithRAG(ctx, userName, req.Question); ok {
-			finalText = augmented
-		}
-	}
-
+	// 组装最后一条用户消息。
+	// 这里不再主动把文档内容塞进提示词：检索已经作为 search_documents 工具暴露，
+	// 由模型自己判断该不该查。
 	if req.ImageURL != "" {
-		out = append(out, MultimodalMessage(finalText, req.ImageURL))
+		out = append(out, MultimodalMessage(req.Question, req.ImageURL))
 	} else {
-		out = append(out, TextMessage("user", finalText))
+		out = append(out, TextMessage("user", req.Question))
 	}
 	return out
-}
-
-// augmentWithRAG 若用户上传过文档，则检索相关片段并构造增强后的提示词
-func (a *AIHelper) augmentWithRAG(ctx context.Context, userName, question string) (string, bool) {
-	ragQuery, err := rag.NewRAGQuery(ctx, userName)
-	if err != nil {
-		// 用户没有上传文档 / 未配置 embedding，静默跳过，走普通对话
-		return "", false
-	}
-	docs, err := ragQuery.RetrieveDocuments(ctx, question)
-	if err != nil || len(docs) == 0 {
-		return "", false
-	}
-	log.Printf("[RAG] augmented question for user=%s with %d docs", userName, len(docs))
-	return rag.BuildRAGPrompt(question, docs), true
 }
 
 // maxAgentSteps 限制工具调用的迭代轮数，防止模型陷入死循环
@@ -145,6 +122,10 @@ type ToolNotifyCallback func(toolName string)
 // 文本增量始终通过 cb 实时输出，因此流式与非流式共用这一套逻辑
 // （非流式只需传入一个空的 cb）。
 func (a *AIHelper) runAgent(ctx context.Context, userName string, req ChatRequest, cb StreamCallback, onTool ToolNotifyCallback) (string, error) {
+	// 把用户标识注入 context，供需要归属隔离的工具（如 search_documents）使用。
+	// 工具参数里不暴露用户标识，模型无法指定查谁的文档。
+	ctx = WithUserName(ctx, userName)
+
 	messages := a.buildRequestMessages(ctx, userName, req)
 	tools := AvailableTools()
 	modelName := resolveModel(req.Model)

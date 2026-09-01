@@ -34,15 +34,24 @@ charset =  "utf8mb4"
   password= "123456"
   vhost= "/"
 
- [ragModelConfig]
-  embeddingModel= "text-embedding-v4"
-  chatModelName="qwen-turbo"
-  docDir = "./docs"
-  baseUrl="https://dashscope.aliyuncs.com/compatible-mode/v1"
-  dimension=1024
-
-  [modelServiceConfig]
+ [modelServiceConfig]
   # OpenAI 兼容网关（Aether 反代）
   baseUrl = "http://localhost:8085/v1"
   defaultModel = "claude-opus-5"
   models = ["claude-opus-5", "gpt-5.6-sol"]
+
+  [qdrantConfig]
+  url = "http://localhost:6333"
+  collection = "documents"
+
+  [embeddingConfig]
+  baseUrl = "https://ark.cn-beijing.volces.com/api/v3"
+  model = "doubao-embedding-vision-250615"
+  dimensions = 1024
+  concurrency = 5
+
+  [ragConfig]
+  chunkSize = 700
+  chunkOverlap = 100
+  topK = 5
+  scoreThreshold = 0.3

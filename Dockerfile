@@ -5,12 +5,6 @@
 ########################
 FROM golang:1.24-bookworm AS builder
 
-# onnxruntime_go binds to the ONNX Runtime C API via cgo, so a C toolchain is
-# required to compile (the actual shared library is loaded lazily at runtime).
-RUN apt-get update \
-    && apt-get install -y --no-install-recommends gcc libc6-dev \
-    && rm -rf /var/lib/apt/lists/*
-
 WORKDIR /src
 
 # Cache go modules first
@@ -21,11 +15,10 @@ RUN --mount=type=cache,target=/go/pkg/mod \
 # Copy the rest of the source
 COPY . .
 
-# CGO must be enabled for onnxruntime_go. Binary links against glibc, which is
-# provided by the debian-slim runtime image below.
+# All dependencies are pure Go, so build a statically linked binary.
 RUN --mount=type=cache,target=/go/pkg/mod \
     --mount=type=cache,target=/root/.cache/go-build \
-    CGO_ENABLED=1 GOOS=linux go build -trimpath -o /out/gopherai .
+    CGO_ENABLED=0 GOOS=linux go build -trimpath -o /out/gopherai .
 
 ########################
 # Runtime stage

@@ -44,14 +44,13 @@ Three orthogonal concepts, previously conflated in one "选择模型" dropdown:
   served by `GET /AI/models` from `modelServiceConfig.models`. The request
   carries the chosen model name; the backend forwards it as the `model` field.
 
-- **Capability (能力)** — orthogonal to the model:
-  - **RAG (文档问答)** — automatic: if the user has uploaded a document, the
-    question is augmented with retrieved passages before hitting the model. Not
-    a user-selectable mode.
-  - **Vision (图像理解)** — automatic: if the message carries an image, it is
-    sent as a multimodal message to the chosen (vision-capable) model. This
-    replaced the old standalone ONNX image-recognition tool.
-  - **Streaming** — always on; not a user choice.
+- **Capability (能力)** — orthogonal to the model. Two kinds, and the difference
+  matters:
+  - **Tool-borne** — offered to the model, which decides when to use it.
+    Document retrieval works this way (`search_documents`).
+  - **Pipeline-borne** — always applied, never the model's choice. Vision
+    (an attached image becomes a multimodal message), conversation history, and
+    streaming are all pipeline-borne.
 
 ## Agent and Tools
 
@@ -74,9 +73,59 @@ Three orthogonal concepts, previously conflated in one "选择模型" dropdown:
 Text is streamed to the client throughout the loop, so the same code path serves
 both streaming and non-streaming callers.
 
-MCP, RAG retrieval, Ollama, and text-to-speech are not part of this version.
-RAG is blocked on an embedding provider: the chat gateway does not serve
-embeddings, so vectorising documents requires a separate provider.
+### This loop is not classic ReAct
+
+Worth stating precisely, because the shapes look alike. Classic ReAct is a
+*prompting* technique: the model emits `Thought:` / `Action:` / `Observation:`
+as prose and the framework parses that text back out. This project uses the
+model API's **native tool calling** instead. Same control flow (act, observe,
+reconsider, repeat), different mechanism:
+
+- Actions arrive as structured tool-call objects, schema-checked, not regex-parsed.
+- There is no separate `Thought` field, so the reasoning trace is not something
+  the UI can display.
+- Several tool calls may be requested in a single step; classic ReAct takes one
+  action per step.
+- Termination is the absence of tool calls, not a `Final Answer:` marker.
+
+An earlier version of this project did hand-roll a pseudo-ReAct scaffold with a
+two-stage JSON prompt. It was replaced once the models were confirmed to support
+native tool calling.
+
+### Known limits of the current loop
+
+- **Tool traffic is not persisted.** Only the user's question and the final
+  answer are stored. Tool calls and their results live for one request, so a
+  follow-up question cannot see what an earlier turn retrieved.
+- **No visible reasoning.** Follows from native tool calling having no `Thought`
+  field; the UI can only report which tool is running.
+
+MCP, Ollama, and text-to-speech are not part of this version.
+
+## Documents and retrieval
+
+- **Document** — a file a user uploaded to be searchable. A user may hold many.
+  Ownership is explicit and enforced server-side.
+
+- **Chunking (切块)** — splitting a document into passages. Pure text
+  processing; **no model is involved**. Worth stating because "chunking" and
+  "embedding" are easily conflated: the embedding model does not chunk.
+
+- **Embedding (向量化)** — turning one passage into a vector. This is what the
+  embedding model does, and it is a separate step from chunking.
+
+- **Chunk overlap** — passages deliberately share a margin of text with their
+  neighbours, so an answer that straddles a boundary is still retrievable.
+
+- **Vector store** — where chunk vectors live, and what is searched by semantic
+  similarity. Every vector carries its owner, so retrieval is filtered to the
+  asking user by the server. The user identity reaches the retrieval tool
+  through request context, never as a tool parameter: a parameter could be
+  steered by prompt injection into reading another user's documents.
+
+- **Score threshold** — a similarity floor. Below it, retrieval reports nothing
+  found rather than returning weak matches, so the model can honestly say the
+  documents do not cover the question.
 
 ## Captcha
 

@@ -91,6 +91,21 @@ services:
       - gopherai
 
   # ---------------------------------------------------------------
+  # Qdrant - vector database for RAG document chunks
+  # 6333 -> REST API / web dashboard at http://localhost:6333/dashboard
+  # ---------------------------------------------------------------
+  qdrant:
+    image: qdrant/qdrant:v1.12.4
+    container_name: gopherai-qdrant
+    restart: unless-stopped
+    ports:
+      - "6333:6333"
+    volumes:
+      - qdrant-data:/qdrant/storage
+    networks:
+      - gopherai
+
+  # ---------------------------------------------------------------
   # Go backend API (Gin) on :9090
   # ---------------------------------------------------------------
   backend:
@@ -104,10 +119,8 @@ services:
       TZ: Asia/Shanghai
       # 聊天模型网关（Aether 反代）的鉴权 key，供 OpenAI 兼容客户端使用
       ANTHROPIC_API_KEY: "${ANTHROPIC_API_KEY:-}"
-      # RAG embedding 凭证（DashScope），可选
-      OPENAI_API_KEY: "${OPENAI_API_KEY:-}"
-      OPENAI_MODEL_NAME: "${OPENAI_MODEL_NAME:-qwen-turbo}"
-      OPENAI_BASE_URL: "${OPENAI_BASE_URL:-https://dashscope.aliyuncs.com/compatible-mode/v1}"
+      # 火山方舟（Volcengine Ark）的 key，用于文档向量化
+      ARK_API_KEY: "${ARK_API_KEY:-}"
     extra_hosts:
       # 让容器内可用 host.docker.internal 访问宿主机上的 Aether 网关
       - "host.docker.internal:host-gateway"
@@ -126,6 +139,8 @@ services:
         condition: service_healthy
       rabbitmq:
         condition: service_healthy
+      qdrant:
+        condition: service_started
     networks:
       - gopherai
 
@@ -153,5 +168,6 @@ volumes:
   mysql-data:
   redis-data:
   rabbitmq-data:
+  qdrant-data:
   backend-uploads:
   backend-docs:

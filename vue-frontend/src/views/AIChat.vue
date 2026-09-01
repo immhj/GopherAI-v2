@@ -16,6 +16,23 @@
           {{ session.name || `会话 ${session.id}` }}
         </li>
       </ul>
+
+      <!-- 知识库文档：上传后 AI 会在需要时自行检索 -->
+      <div class="doc-panel">
+        <div class="doc-panel-title">
+          知识库<span class="doc-count">{{ documents.length }}</span>
+        </div>
+        <p v-if="documents.length === 0" class="doc-empty">
+          上传 .md / .txt，提问时 AI 会自行判断是否检索
+        </p>
+        <ul class="doc-list">
+          <li v-for="doc in documents" :key="doc.id" class="doc-item">
+            <span class="doc-name" :title="doc.filename">{{ doc.filename }}</span>
+            <span class="doc-meta">{{ doc.chunk_count }} 块</span>
+            <button class="doc-del" title="删除" @click="deleteDocument(doc)">✕</button>
+          </li>
+        </ul>
+      </div>
     </div>
 
     <!-- 右侧聊天区域 -->
@@ -27,12 +44,22 @@
           <option v-for="m in models" :key="m" :value="m">{{ m }}</option>
         </select>
         <button class="upload-btn" @click="triggerImageUpload" :disabled="loading">🖼️ 图片</button>
+        <button class="upload-btn" @click="triggerFileUpload" :disabled="uploading">
+          {{ uploading ? '索引中…' : '📎 文档' }}
+        </button>
         <input
           ref="imageInput"
           type="file"
           accept="image/*"
           style="display: none"
           @change="handleImageSelect"
+        />
+        <input
+          ref="fileInput"
+          type="file"
+          accept=".md,.txt,text/markdown,text/plain"
+          style="display: none"
+          @change="handleFileUpload"
         />
       </div>
 
@@ -94,7 +121,7 @@
 
 import { ref, nextTick, computed, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
-import { ElMessage } from 'element-plus'
+import { ElMessage, ElMessageBox } from 'element-plus'
 import api from '../utils/api'
 
 export default {
@@ -114,6 +141,9 @@ export default {
     const models = ref([])
     const imageInput = ref(null)
     const attachedImage = ref('')
+    const fileInput = ref(null)
+    const uploading = ref(false)
+    const documents = ref([])
 
 
     const renderMarkdown = (text) => {
@@ -434,9 +464,83 @@ export default {
       router.push('/login')
     }
 
+    const loadDocuments = async () => {
+      try {
+        const response = await api.get('/file/documents')
+        if (response.data && response.data.status_code === 1000) {
+          documents.value = response.data.documents || []
+        }
+      } catch (error) {
+        console.error('Load documents error:', error)
+      }
+    }
+
+    const triggerFileUpload = () => {
+      if (fileInput.value) fileInput.value.click()
+    }
+
+    const handleFileUpload = async (event) => {
+      const file = event.target.files[0]
+      if (fileInput.value) fileInput.value.value = ''
+      if (!file) return
+
+      const name = file.name.toLowerCase()
+      if (!name.endsWith('.md') && !name.endsWith('.txt')) {
+        ElMessage.error('只允许上传 .md 或 .txt 文件')
+        return
+      }
+
+      try {
+        uploading.value = true
+        const formData = new FormData()
+        formData.append('file', file)
+        // 上传是同步的：等切块 + 向量化 + 入库完成才返回
+        const response = await api.post('/file/upload', formData, {
+          headers: { 'Content-Type': 'multipart/form-data' }
+        })
+        if (response.data && response.data.status_code === 1000) {
+          const chunks = response.data.document ? response.data.document.chunk_count : 0
+          ElMessage.success(`已索引 ${chunks} 个片段`)
+          await loadDocuments()
+        } else {
+          ElMessage.error(response.data?.status_msg || '上传失败')
+        }
+      } catch (error) {
+        console.error('File upload error:', error)
+        ElMessage.error('上传失败，请检查向量化服务是否可用')
+      } finally {
+        uploading.value = false
+      }
+    }
+
+    const deleteDocument = async (doc) => {
+      try {
+        await ElMessageBox.confirm(`删除「${doc.filename}」？其向量也会一并清除。`, '提示', {
+          confirmButtonText: '删除',
+          cancelButtonText: '取消',
+          type: 'warning'
+        })
+      } catch {
+        return // 用户取消
+      }
+      try {
+        const response = await api.delete(`/file/documents/${doc.id}`)
+        if (response.data && response.data.status_code === 1000) {
+          ElMessage.success('已删除')
+          await loadDocuments()
+        } else {
+          ElMessage.error(response.data?.status_msg || '删除失败')
+        }
+      } catch (error) {
+        console.error('Delete document error:', error)
+        ElMessage.error('删除失败')
+      }
+    }
+
     onMounted(() => {
       loadModels()
       loadSessions()
+      loadDocuments()
       // 进入页面即处于"新聊天"状态，用户可以直接输入并发送
       createNewSession()
     })
@@ -455,12 +559,18 @@ export default {
       models,
       imageInput,
       attachedImage,
+      fileInput,
+      uploading,
+      documents,
       renderMarkdown,
       createNewSession,
       switchSession,
       sendMessage,
       triggerImageUpload,
       handleImageSelect,
+      triggerFileUpload,
+      handleFileUpload,
+      deleteDocument,
       handleLogout
     }
   }
@@ -563,6 +673,82 @@ export default {
   margin: 0;
   flex: 1;
   overflow-y: auto;
+}
+
+/* 知识库文档面板 */
+.doc-panel {
+  border-top: 1px solid rgba(0, 0, 0, 0.08);
+  padding: 14px 16px;
+  max-height: 38%;
+  overflow-y: auto;
+  background: rgba(102, 126, 234, 0.03);
+}
+
+.doc-panel-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: #2c3e50;
+  margin-bottom: 8px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.doc-count {
+  background: #667eea;
+  color: white;
+  border-radius: 10px;
+  padding: 0 7px;
+  font-size: 11px;
+  line-height: 18px;
+}
+
+.doc-empty {
+  font-size: 12px;
+  color: #95a5a6;
+  line-height: 1.5;
+  margin: 0;
+}
+
+.doc-list {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+}
+
+.doc-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 0;
+  font-size: 12px;
+  color: #2c3e50;
+}
+
+.doc-name {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.doc-meta {
+  color: #95a5a6;
+  flex-shrink: 0;
+}
+
+.doc-del {
+  border: none;
+  background: transparent;
+  color: #c0392b;
+  cursor: pointer;
+  font-size: 13px;
+  padding: 0 2px;
+  flex-shrink: 0;
+}
+
+.doc-del:hover {
+  color: #e74c3c;
 }
 
 .session-item {

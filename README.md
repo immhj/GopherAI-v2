@@ -2,15 +2,16 @@
 
 一个用 Go + Vue 3 写的 AI 对话应用。后端基于 Gin，前端基于 Vue 3 + Element Plus，整套服务用 Docker Compose 一键拉起。
 
-对话支持**多模型切换**、**流式输出**、**图片理解**，以及**由模型自主决定何时调用工具**的 agent 能力。
+对话支持**多模型切换**、**流式输出**、**图片理解**、**文档知识库检索（RAG）**，以及**由模型自主决定何时调用工具**的 agent 能力。
 
 ## 功能
 
 - **邮箱注册 / 登录** —— 注册时邮件发送验证码（验证码存 Redis，2 分钟有效），JWT 鉴权
 - **多模型切换** —— 模型清单由后端下发，前端下拉直接选真实模型（如 `claude-opus-5`、`gpt-5.6-sol`）
-- **流式输出** —— SSE 逐字返回，默认且唯一的响应方式
+- **流式输出** —— SSE 逐字返回，且贯穿整个工具调用过程
 - **图片理解** —— 对话里直接附带图片，作为多模态消息发给视觉模型
-- **Agent 工具调用** —— 工具清单随请求声明给模型，由模型自己决定要不要调、调哪个、参数怎么填；后端执行后把结果回灌，循环直到模型给出最终答案
+- **文档知识库（RAG）** —— 上传 .md / .txt，自动切块 + 向量化 + 存入向量库；提问时**由模型自己判断**要不要检索
+- **Agent 工具调用** —— 工具清单随请求声明给模型，模型决定调不调、调哪个、参数怎么填；后端执行后回灌结果，循环至给出答案
 - **多会话管理** —— 会话列表、历史记录，消息经 RabbitMQ 异步落库
 
 ## 技术栈
@@ -19,10 +20,12 @@
 |---|---|
 | 前端 | Vue 3、Vue Router、Element Plus、Axios、nginx |
 | 后端 | Go、Gin、GORM、golang-jwt |
-| 存储 | MySQL 8（业务数据）、Redis Stack（验证码 / 向量索引） |
+| 存储 | MySQL 8（业务数据）、Redis（验证码）、Qdrant（向量） |
 | 消息队列 | RabbitMQ（消息异步持久化） |
-| 模型接入 | 任意 OpenAI 兼容网关 |
+| 模型接入 | 任意 OpenAI 兼容网关（对话）、火山方舟 Ark（向量化） |
 | 部署 | Docker、Docker Compose |
+
+后端只有 9 个直接依赖，没有引入任何 LLM 框架或向量库 SDK，模型和向量库都是直连 HTTP。
 
 ## 架构
 
@@ -33,16 +36,18 @@
 nginx (前端静态资源 + /api 反向代理，SSE 透传)
   │
   ▼
-Go / Gin 后端 ──► MySQL      业务数据
-  │              ├► Redis     验证码、向量索引
-  │              └► RabbitMQ  消息异步落库
-  ▼
-OpenAI 兼容网关 ──► claude / gpt / ...
+Go / Gin 后端 ──► MySQL      用户、会话、消息、文档元信息
+  │              ├► Redis     验证码
+  │              ├► RabbitMQ  消息异步落库
+  │              └► Qdrant    文档向量
+  │
+  ├──► OpenAI 兼容网关 ──► claude / gpt / ...   对话
+  └──► 火山方舟 Ark                              文档向量化
 ```
 
 ## 快速开始
 
-**前置条件**：Docker、Docker Compose，以及一个 OpenAI 兼容的模型服务端点。
+**前置条件**：Docker、Docker Compose、一个 OpenAI 兼容的模型服务端点、一个火山方舟 API Key（做 RAG 用）。
 
 ```bash
 # 1. 克隆
@@ -56,8 +61,8 @@ cp config/config.docker.toml.example config/config.docker.toml
 #    - emailConfig：QQ 邮箱地址 + SMTP 授权码（注册验证码要用）
 #    - modelServiceConfig：你的模型网关地址与可选模型清单
 
-# 4. 提供模型网关的 API Key
-cp .env.example .env      # 然后填入 ANTHROPIC_API_KEY
+# 4. 提供两个 API Key
+cp .env.example .env      # 填入 ANTHROPIC_API_KEY 和 ARK_API_KEY
 
 # 5. 启动
 docker compose up -d --build
@@ -78,6 +83,7 @@ QQ 邮箱 → 设置 → 账号 → 开启「POP3/SMTP 服务」→ 按提示获
 | 前端 | http://localhost:8090 | 应用入口 |
 | 后端 API | http://localhost:9090 | Gin 服务 |
 | phpMyAdmin | http://localhost:8081 | MySQL 可视化，账号 `root` / 密码见配置 |
+| Qdrant 面板 | http://localhost:6333/dashboard | 向量数据可视化 |
 | RabbitMQ 管理台 | http://localhost:15672 | 默认 `root` / `123456` |
 | RedisInsight | http://localhost:8001 | Redis 可视化 |
 | MySQL | localhost:13306 | 映射到宿主机的非默认端口，避免冲突 |
@@ -87,12 +93,14 @@ QQ 邮箱 → 设置 → 账号 → 开启「POP3/SMTP 服务」→ 按提示获
 
 ## 环境变量
 
+密钥一律走环境变量，不写进配置文件。
+
 | 变量 | 用途 | 必填 |
 |---|---|---|
-| `ANTHROPIC_API_KEY` | 模型网关的鉴权 Key | 是 |
-| `OPENAI_API_KEY` | RAG 向量化（embedding）凭证 | 否，本版未启用 RAG |
+| `ANTHROPIC_API_KEY` | 对话模型网关的鉴权 Key | 是 |
+| `ARK_API_KEY` | 火山方舟，文档向量化 | 用 RAG 则必填 |
 
-配置文件里不放 Key，一律走环境变量。
+> Windows 上如果把变量设在「用户环境变量」里，**已经打开的终端读不到**，需要新开一个终端再 `docker compose up`，否则容器里拿不到 key。
 
 ### 连接宿主机上的模型网关
 
@@ -123,7 +131,9 @@ models = ["claude-opus-5", "gpt-5.6-sol"]
 | POST | `/AI/chat/send-stream` | 在已有会话中流式对话 |
 | POST | `/AI/chat/send-new-session` | 新建会话并同步对话 |
 | POST | `/AI/chat/send` | 在已有会话中同步对话 |
-| POST | `/file/upload` | 上传文档（.md / .txt），供 RAG 使用 |
+| POST | `/file/upload` | 上传文档（.md / .txt），同步完成切块与向量化 |
+| GET | `/file/documents` | 文档列表 |
+| DELETE | `/file/documents/:id` | 删除文档及其向量 |
 
 ### 流式协议
 
@@ -131,7 +141,7 @@ SSE 的每一帧都是 JSON 事件，避免文本里的空格和换行破坏分�
 
 ```
 data: {"sessionId":"..."}          // 新会话建好时先下发
-data: {"tool":"get_current_time"}  // agent 正在调用工具
+data: {"tool":"search_documents"}  // agent 正在调用工具
 data: {"content":" world"}         // 文本增量，空格/换行原样保留
 data: [DONE]
 ```
@@ -148,8 +158,11 @@ data: [DONE]
 ├── middleware/jwt/         JWT 鉴权中间件
 ├── common/
 │   ├── aihelper/           模型客户端、工具表、agent 循环
-│   ├── rag/                向量检索（本版未接入）
-│   ├── mcp/                MCP 天气服务（独立程序，本版未接入）
+│   ├── rag/                切块 + 向量化 + 检索的编排
+│   ├── chunk/              文本切块
+│   ├── embedding/          火山方舟向量化客户端
+│   ├── qdrant/             向量库客户端
+│   ├── mcp/                MCP 天气服务（独立程序，尚未接入）
 │   ├── mysql/ redis/ rabbitmq/ email/
 ├── config/                 配置定义与文件
 ├── vue-frontend/           Vue 3 前端
@@ -164,26 +177,69 @@ data: [DONE]
 
 - **Email** —— 登录凭证，唯一
 - **Nickname** —— 界面展示的昵称，可改、不唯一
-- **Username** —— 系统生成的内部唯一标识，用户不可见；会话、消息、上传目录都以它为归属键，所以必须永久稳定
+- **Username** —— 系统生成的内部唯一标识，用户不可见；会话、消息、文档、上传目录都以它为归属键，所以必须永久稳定
 
 改昵称不会影响任何归属关系，登录方式也与内部主键解耦。
 
-### 工具表是 agent 的接缝
+### Agent：工具表是唯一的接缝
 
-模型每次请求都会收到工具清单（名字 + 描述 + 参数 JSON Schema），**由模型自主决定**是否调用。新增能力只需往工具表注册一个条目，agent 循环本身无需改动：
+模型每次请求都会收到工具清单（名字 + 描述 + 参数 JSON Schema），**由模型自主决定**是否调用。新增能力只需往工具表注册一个条目，agent 循环本身无需改动 —— 接入 RAG 时 `runAgent` 确实一行都没改。
 
-- MCP：把 MCP server 的 `tools/list` 翻译成工具声明注册进来
-- RAG：注册一个 `search_documents` 工具，让模型自己判断该不该查文档
+当前注册了 2 个工具：
 
-循环有最大轮数限制，防止反复调用工具停不下来。
+| 工具 | 作用 |
+|---|---|
+| `get_current_time` | 查当前日期时间，可指定时区 |
+| `search_documents` | 在该用户自己的文档里做语义检索 |
+
+需要区分的是：**并非所有能力都是工具**。图片理解、会话历史、流式输出是管道内置的，模型没有选择权；只有文档检索是交给模型判断的。
+
+### 这个循环不是经典 ReAct
+
+形状像，机制不同。经典 ReAct 是**提示词技巧**：让模型吐出 `Thought:` / `Action:` / `Observation:` 文本，框架再解析这段文本。本项目用的是模型 API 的**原生函数调用**：
+
+| | 经典 ReAct | 本项目 |
+|---|---|---|
+| 动作表达 | 模型吐文本，框架正则解析 | 结构化 `tool_calls`，带 Schema 校验 |
+| Thought | 显式文本字段，可展示 | 没有独立字段，推理不可见 |
+| 并行动作 | 一步一个 Action | 一步可并发多个 |
+| 终止条件 | 匹配 `Final Answer:` | 不再返回 `tool_calls` 即终止 |
+
+循环逻辑（`common/aihelper/aihelper.go` 的 `runAgent`，上限 5 轮防死循环）：
+
+```
+注入 userName 到 context（工具要用，但模型不可指定）
+循环：
+  ├─ 带工具清单发起流式请求，文本增量实时推给前端
+  ├─ 没有 tool_calls → 本轮内容即最终答案，结束
+  └─ 有 tool_calls → 逐个执行、结果作为 role=tool 消息回灌 → 下一轮
+```
+
+工具执行失败不会中断对话：错误信息作为工具结果回灌，让模型自己决定换个查法还是如实告知。
+
+早期版本曾手搓过一套伪 ReAct（两段式 JSON 提示词 + 字符串兜底解析），在确认模型原生支持 `tool_calls` 后已移除。
+
+### RAG：切块和向量化是两件事
+
+容易混为一谈，但分工明确：
+
+- **切块**是纯文本处理，**不需要任何模型**。按 markdown 标题和段落边界优先切，目标 700 字，相邻块重叠 100 字（避免答案正好被切断在边界）。
+- **向量化**才是 embedding 模型做的事，一块文本换一个向量。
+
+检索的归属隔离是服务端强制的：每个向量都带 owner，检索时按当前登录用户过滤。**用户身份通过请求 context 传给工具，绝不作为工具参数** —— 参数可能被提示注入操纵，从而读到别人的文档。
+
+相似度低于阈值时返回"没找到相关内容"，让模型如实说明，而不是硬套无关片段。
 
 术语定义详见 [CONTEXT.md](./CONTEXT.md)。
 
-## 本版未包含
+## 已知局限
 
-- **RAG 检索** —— 代码保留，但卡在 embedding：聊天网关不提供 embedding 接口，向量化需要另配服务商
-- **MCP** —— `common/mcp` 下有一个可用的天气 server，但尚未接进 agent 工具表
-- **语音合成** —— 已移除
+- **工具调用记录不落库** —— 每轮只持久化用户问题和最终答案，工具调用与结果是临时的。追问细节时模型看不到上一轮检索到了什么，可能重新检索。
+- **推理过程不可见** —— 原生函数调用没有 `Thought` 字段，前端只能显示"正在调用工具 X"。
+- **文档类型仅限 .md / .txt** —— PDF、DOCX 需要额外的文本抽取。
+- **向量化不能批量** —— 火山方舟的多模态向量接口一次只处理一条输入，因此靠并发（默认 5 路）而非批处理，大文档索引会慢一些。
+- **MCP 尚未接入** —— `common/mcp` 下有一个可用的天气 server，但还没注册进工具表。
+- **语音合成已移除**。
 
 ## 安全提示
 

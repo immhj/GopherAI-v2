@@ -48,19 +48,33 @@ charset =  "utf8mb4"
   password= "123456"
   vhost= "/"
 
- # RAG embedding provider. Needs OPENAI_API_KEY (DashScope) to actually work;
- # RAG retrieval is not wired into this version.
- [ragModelConfig]
-  embeddingModel= "text-embedding-v4"
-  chatModelName="qwen-turbo"
-  docDir = "./docs"
-  baseUrl="https://dashscope.aliyuncs.com/compatible-mode/v1"
-  dimension=1024
-
-  # Chat models are reached through one OpenAI-compatible gateway.
+ # Chat models are reached through one OpenAI-compatible gateway.
   # The auth key comes from the ANTHROPIC_API_KEY environment variable.
   # host.docker.internal lets the container reach a gateway on the host.
   [modelServiceConfig]
   baseUrl = "http://host.docker.internal:8085/v1"
   defaultModel = "claude-opus-5"
   models = ["claude-opus-5", "gpt-5.6-sol"]
+
+  # Vector database for RAG document chunks.
+  [qdrantConfig]
+  url = "http://qdrant:6333"
+  collection = "documents"
+
+  # Document embedding via Volcengine Ark. Key comes from ARK_API_KEY.
+  # Only the vision series is currently available (the text-only embedding
+  # models were retired); it accepts plain text just fine.
+  # The endpoint handles one input per request, so concurrency is used instead
+  # of batching. `dimensions` asks the model to reduce output size.
+  [embeddingConfig]
+  baseUrl = "https://ark.cn-beijing.volces.com/api/v3"
+  model = "doubao-embedding-vision-250615"
+  dimensions = 1024
+  concurrency = 5
+
+  # Chunking and retrieval parameters.
+  [ragConfig]
+  chunkSize = 700
+  chunkOverlap = 100
+  topK = 5
+  scoreThreshold = 0.3

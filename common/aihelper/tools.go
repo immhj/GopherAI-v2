@@ -7,7 +7,25 @@ import (
 	"sort"
 	"sync"
 	"time"
+
+	"GopherAI/common/rag"
 )
+
+// userNameKey 用于把当前登录用户放进 context。
+// 工具需要知道"是谁在问"，但绝不能让模型通过参数指定用户 —— 否则模型被诱导
+// 就能读到别人的文档。因此用户身份走 context 由服务端注入，不进工具参数表。
+type userNameKey struct{}
+
+// WithUserName 把用户标识注入 context
+func WithUserName(ctx context.Context, userName string) context.Context {
+	return context.WithValue(ctx, userNameKey{}, userName)
+}
+
+// UserNameFromContext 取出当前用户标识
+func UserNameFromContext(ctx context.Context) (string, bool) {
+	v, ok := ctx.Value(userNameKey{}).(string)
+	return v, ok && v != ""
+}
 
 // 工具表（Tool Registry）是 agent 的核心接缝：
 // 模型每次请求都会收到这张表的描述，由模型自己决定要不要调用、调哪个、参数填什么。
@@ -114,6 +132,54 @@ func registerBuiltinTools() {
 			}
 			now := time.Now().In(loc)
 			return fmt.Sprintf("当前时间: %s (%s)", now.Format("2006-01-02 15:04:05 Monday"), tz), nil
+		},
+	)
+
+	// search_documents：在用户自己上传的文档里做语义检索。
+	// 由模型自行判断某个问题是否需要查文档 —— 问"你好"时不该去翻资料，
+	// 问"我文档里写了什么"时它会自己调用。
+	// 参数里只有 query 和 top_k，没有用户标识：范围由服务端按登录态强制限定。
+	RegisterTool(
+		"search_documents",
+		"在用户上传的知识库文档中按语义检索相关内容。当用户的问题涉及他自己的文档、"+
+			"资料、笔记，或提到「我的文档」「我上传的文件」，或者问题需要依据特定资料才能"+
+			"准确回答时，使用此工具。返回最相关的若干文本片段。",
+		map[string]interface{}{
+			"type": "object",
+			"properties": map[string]interface{}{
+				"query": map[string]interface{}{
+					"type":        "string",
+					"description": "检索用的查询语句，应当是完整、具体的自然语言描述。",
+				},
+				"top_k": map[string]interface{}{
+					"type":        "integer",
+					"description": "返回的片段数量，默认 5。",
+				},
+			},
+			"required": []string{"query"},
+		},
+		func(ctx context.Context, args map[string]interface{}) (string, error) {
+			userName, ok := UserNameFromContext(ctx)
+			if !ok {
+				return "", fmt.Errorf("no user in context, cannot search documents")
+			}
+
+			query, _ := args["query"].(string)
+			if query == "" {
+				return "", fmt.Errorf("query is required")
+			}
+
+			topK := 0
+			// JSON 数字会被解成 float64
+			if v, ok := args["top_k"].(float64); ok {
+				topK = int(v)
+			}
+
+			hits, err := rag.Retrieve(ctx, userName, query, topK)
+			if err != nil {
+				return "", err
+			}
+			return rag.FormatHits(hits), nil
 		},
 	)
 }
